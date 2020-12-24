@@ -1,0 +1,554 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Parameters:
+    LambdaFunctionName: 
+       Type: String
+       Default: "UserDataStore"
+       Description: "Name of the lambda function"
+    
+    HttpDataSourceName:
+       Type: String
+       Default: "HTTP"   
+       Description: "Name of the http data source"
+       
+Resources:
+
+    GraphQLHttpApi:
+     Type: AWS::AppSync::GraphQLApi
+     Properties:
+       Name: "UserData"
+       AuthenticationType: API_KEY
+    
+    HttpApiKey:
+     Type: "AWS::AppSync::ApiKey"
+     Properties:
+      ApiId: 
+        Fn::GetAtt:
+        - GraphQLHttpApi
+        - ApiId
+    
+    GraphQLSchema:
+      Type: "AWS::AppSync::GraphQLSchema"
+      Properties:
+        ApiId: 
+          Fn::GetAtt:
+          - GraphQLHttpApi
+          - ApiId
+        Definition: |
+                schema {
+                    query: Query
+                    mutation: Mutation
+                }
+
+                type Mutation {
+                    addUser(userInput: UserInput!): User
+                    deleteUser(id: ID!): User
+                }
+
+                type Query {
+                    getUser(id: ID): User
+                    listUser: [User!]!
+                }
+
+                type User {
+                    id: ID!
+                    username: String!
+                    firstname: String
+                    lastname: String
+                    phone: String
+                    email: String
+                }
+
+                input UserInput {
+                    id: ID!
+                    username: String!
+                    firstname: String
+                    lastname: String
+                    phone: String
+                    email: String
+                }
+    
+    HTTPDataSource:
+      Type: AWS::AppSync::DataSource
+      Properties:
+        Type: HTTP
+        Name:
+          Ref: HttpDataSourceName
+        ApiId: 
+          Fn::GetAtt:
+          - GraphQLHttpApi
+          - ApiId
+        HttpConfig:
+          Endpoint:
+            Fn::Join:
+            - ""
+            - - "https://"
+              -
+                Ref: ApiGatewayApi
+              - ".execute-api."
+              - 
+                Ref: "AWS::Region"
+              - ".amazonaws.com"
+    
+    
+    AddUserResolver:
+      Type: "AWS::AppSync::Resolver"
+      DependsOn:
+         - GraphQLSchema
+         - HTTPDataSource
+      Properties:
+        ApiId: !GetAtt GraphQLHttpApi.ApiId
+        TypeName: "Mutation"
+        FieldName: "addUser"
+        DataSourceName: !GetAtt HTTPDataSource.Name
+        RequestMappingTemplate: |
+          #set($xml = "<User>")
+          #foreach ($mapEntry in $ctx.args.userInput.entrySet())
+              #set($xml = "$xml<$mapEntry.key>$mapEntry.value</$mapEntry.key>")
+          #end
+          #set($xml = "$xml</User>")
+          {
+            "version": "2018-05-29",
+            "method": "POST",
+            "params": {
+                "headers":{
+                   "Content-Type":"application/xml"
+                },
+                "body":"$xml"
+            },
+            "resourcePath": "/v1/users"
+          }
+        ResponseMappingTemplate: |
+          ## return the body
+          #if($ctx.result.statusCode == 200)
+              ##if response is 200
+              $utils.toJson($utils.xml.toMap($ctx.result.body).User)
+          #else
+              ##if response is not 200, append the response to error block.
+              $utils.appendError($ctx.result.body, $ctx.result.statusCode)
+          #end
+    
+    ListUserResolver:
+      Type: "AWS::AppSync::Resolver"
+      DependsOn: 
+       - GraphQLSchema
+       - HTTPDataSource
+      Properties:
+        ApiId: !GetAtt GraphQLHttpApi.ApiId
+        TypeName: "Query"
+        FieldName: "listUser"
+        DataSourceName: !GetAtt HTTPDataSource.Name
+        RequestMappingTemplate: |
+           {
+                "version": "2018-05-29",
+                "method": "GET", 
+                "resourcePath": "/v1/users",
+                "params":{
+                    "headers": {
+                        "Content-Type": "application/json"
+                    }
+                }
+            }
+        ResponseMappingTemplate: |
+            ## If the response is not 200 then return an error. Else return the body **
+            #if($ctx.result.statusCode == 200)
+                $ctx.result.body
+            #else
+                $utils.appendError($ctx.result.body, $ctx.result.statusCode)
+            #end
+       
+    
+    GetUserResolver:
+      Type: "AWS::AppSync::Resolver"
+      DependsOn: 
+       - GraphQLSchema
+       - HTTPDataSource
+      Properties:
+        ApiId: !GetAtt GraphQLHttpApi.ApiId
+        TypeName: "Query"
+        FieldName: "getUser"
+        DataSourceName: !GetAtt HTTPDataSource.Name
+        RequestMappingTemplate: |
+          {
+            "version": "2018-05-29",
+            "method": "GET",
+            "params": {
+          	  "headers": {
+              	"Content-Type": "application/json"
+          	  }
+            },
+            "resourcePath": "/v1/users/${ctx.args.id}"
+          }
+        ResponseMappingTemplate: |
+          ## return the body
+          #if($ctx.result.statusCode == 200 )
+             ##if response is 200, check the body for response
+             #if($util.isNullOrEmpty($ctx.result.body))
+              null
+             #else
+              $ctx.result.body
+             #end
+          #else
+             ##if response is not 200, append the response to error block.
+             $utils.appendError($ctx.result.body, $ctx.result.statusCode)
+          #end
+
+    DeleteUserResolver:
+      Type: "AWS::AppSync::Resolver"
+      DependsOn: 
+       - GraphQLSchema
+       - HTTPDataSource
+      Properties:
+        ApiId: !GetAtt GraphQLHttpApi.ApiId
+        TypeName: "Mutation"
+        FieldName: "deleteUser"
+        DataSourceName: !GetAtt HTTPDataSource.Name
+        RequestMappingTemplate: |
+          {
+            "version": "2018-05-29",
+            "method": "DELETE",
+            "params": {
+            	"headers": {
+              	"Content-Type": "application/json"
+            	},
+            },
+            "resourcePath": "/v1/users/${ctx.args.id}"
+          }
+        ResponseMappingTemplate: |
+          ## return the body
+          #if($ctx.result.statusCode == 200 )
+             ##if response is 200, check the body for response
+             #if($util.isNullOrEmpty($ctx.result.body))
+              null
+             #else
+              $ctx.result.body
+             #end
+          #else
+             ##if response is not 200, append the response to error block.
+             $utils.appendError($ctx.result.body, $ctx.result.statusCode)
+          #end
+    
+          
+    LambdaFunction:
+     Type: AWS::Lambda::Function
+     Properties:
+       FunctionName:
+          Ref: LambdaFunctionName
+       Handler: index.handler
+       Runtime: nodejs10.x
+       Role: !GetAtt LambdaExecutionRole.Arn
+       Code:
+         S3Bucket: "awsappsync"
+         S3Key: "resources/http/http-full-function.zip"
+    
+    LambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Version: '2012-10-17'
+         Statement:
+         - Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+           Action:
+           - sts:AssumeRole
+       Path: "/"
+       ManagedPolicyArns:
+       - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"    
+    
+    LambdaInvokePermission:
+        Type: 'AWS::Lambda::Permission'
+        Properties:
+            FunctionName: !GetAtt
+              - LambdaFunction
+              - Arn
+            Action: 'lambda:InvokeFunction'
+            Principal: 'apigateway.amazonaws.com'
+            SourceAccount: !Ref 'AWS::AccountId'
+            SourceArn:
+              Fn::Join:
+              - ""
+              - - "arn:aws:execute-api:" 
+                - {"Ref": "AWS::Region"}
+                - ":"
+                - {"Ref": "AWS::AccountId"}
+                - ":"
+                - {"Ref": "ApiGatewayApi"}
+                - "/*"
+                
+    APIGatewayExecutionRole:
+        Properties:
+          AssumeRolePolicyDocument:
+            Statement:
+            - Action:
+              - sts:AssumeRole
+              Effect: Allow
+              Principal:
+                Service:
+                - apigateway.amazonaws.com
+            Version: 2012-10-17
+          Policies:
+          - PolicyDocument:
+              Statement:
+              - Action:
+                 - lambda:Invoke*
+                Effect: Allow
+                Resource:
+                  Fn::GetAtt:
+                  - LambdaFunction
+                  - Arn
+              Version: 2012-10-17
+            PolicyName: apigInvokeLambda
+        Type: AWS::IAM::Role
+              
+    ApiGatewayApi:
+        Type: AWS::Serverless::Api
+        Properties:
+            Name: "Api gateway User api"
+            StageName: "v1"
+            DefinitionBody:
+                swagger: "2.0"
+                info:
+                  version: "2018-06-13T18:06:51Z"
+                  title: "UserApi"
+                basePath: "/v1"
+                schemes:
+                - "https"
+                paths:
+                  /users:
+                    get:
+                      consumes:
+                      - "application/json"
+                      produces:
+                      - "application/json"
+                      responses:
+                        "200":
+                          description: "200 response"
+                          schema:
+                            $ref: "#/definitions/UserList"
+                      x-amazon-apigateway-integration:
+                        credentials:
+                          Fn::GetAtt:
+                          - APIGatewayExecutionRole
+                          - Arn
+                        uri:
+                          Fn::Sub:
+                          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}${LambdaAlias}/invocations
+                          - LambdaAlias: ""
+                            LambdaArn:
+                              Fn::GetAtt:
+                              - LambdaFunction
+                              - Arn
+                        responses:
+                          default:
+                            statusCode: "200"
+                            responseTemplates:
+                              application/json: "#set($inputRoot = $input.path('$'))\n$inputRoot.body"
+                        requestTemplates:
+                          application/json: "{\n    \"operation\": \"ListUsers\"\n}"
+                        passthroughBehavior: "when_no_match"
+                        httpMethod: "POST"
+                        contentHandling: "CONVERT_TO_TEXT"
+                        type: "aws"
+                    post:
+                      consumes:
+                      - "application/xml"
+                      produces:
+                      - "application/xml"
+                      parameters:
+                      - in: "body"
+                        name: "User"
+                        required: true
+                        schema:
+                          $ref: "#/definitions/User"
+                      responses:
+                        "200":
+                          description: "200 response"
+                          schema:
+                            $ref: "#/definitions/User"
+                      x-amazon-apigateway-request-validator: "Validate body"
+                      x-amazon-apigateway-integration:
+                        credentials:
+                          Fn::GetAtt:
+                          - APIGatewayExecutionRole
+                          - Arn
+                        uri:
+                          Fn::Sub:
+                          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}${LambdaAlias}/invocations
+                          - LambdaAlias: ""
+                            LambdaArn:
+                              Fn::GetAtt:
+                              - LambdaFunction
+                              - Arn
+                        responses:
+                          default:
+                            statusCode: "200"
+                            responseTemplates:
+                              application/xml: "#set($inputRoot = $input.path('$'))\n$inputRoot.body"
+                        passthroughBehavior: "NEVER"
+                        httpMethod: "POST"
+                        requestTemplates:
+                          application/xml: "{\n   \"operation\": \"AddUser\",\n   \"body\" : $input.json('$')\n\
+                            }"
+                        contentHandling: "CONVERT_TO_TEXT"
+                        type: "aws"   
+                  /users/{id}:
+                    get:
+                      consumes:
+                      - "application/json"
+                      produces:
+                      - "application/json"
+                      parameters:
+                      - name: "id"
+                        in: "path"
+                        required: true
+                        type: "string"
+                      responses:
+                        "200":
+                          description: "200 response"
+                          schema:
+                            $ref: "#/definitions/User"
+                      x-amazon-apigateway-integration:
+                        credentials:
+                          Fn::GetAtt:
+                          - APIGatewayExecutionRole
+                          - Arn
+                        uri:
+                          Fn::Sub:
+                          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}${LambdaAlias}/invocations
+                          - LambdaAlias: ""
+                            LambdaArn:
+                              Fn::GetAtt:
+                              - LambdaFunction
+                              - Arn
+                        responses:
+                          default:
+                            statusCode: "200"
+                            responseTemplates:
+                              application/json: "#set($inputRoot = $input.path('$'))\n$inputRoot.body"
+                        passthroughBehavior: "when_no_templates"
+                        httpMethod: "POST"
+                        requestTemplates:
+                          application/json: "{\n   \"operation\": \"GetUser\",\n   \"id\" : $input.params('id')\n\
+                            }"
+                        contentHandling: "CONVERT_TO_TEXT"
+                        type: "aws"
+                    put:
+                      consumes:
+                      - "application/json"
+                      produces:
+                      - "application/json"
+                      parameters:
+                      - name: "id"
+                        in: "path"
+                        required: true
+                        type: "string"
+                      responses:
+                        "200":
+                          description: "200 response"
+                          schema:
+                            $ref: "#/definitions/User"
+                      x-amazon-apigateway-integration:
+                        credentials:
+                          Fn::GetAtt:
+                          - APIGatewayExecutionRole
+                          - Arn
+                        uri:
+                          Fn::Sub:
+                          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}${LambdaAlias}/invocations
+                          - LambdaAlias: ""
+                            LambdaArn:
+                              Fn::GetAtt:
+                              - LambdaFunction
+                              - Arn
+                        responses:
+                          default:
+                            statusCode: "200"
+                            responseTemplates:
+                              application/json: "#set($inputRoot = $input.path('$'))\n$inputRoot.body"
+                        passthroughBehavior: "when_no_templates"
+                        httpMethod: "POST"
+                        requestTemplates:
+                          application/json: "{\n\"operation\":\"UpdateUser\",\n\"id\":$input.params('id'),\n\
+                            \"body\":$input.body\n}"
+                        contentHandling: "CONVERT_TO_TEXT"
+                        type: "aws"
+                    delete:
+                      consumes:
+                      - "application/json"
+                      produces:
+                      - "application/json"
+                      parameters:
+                      - name: "id"
+                        in: "path"
+                        required: true
+                        type: "string"
+                      responses:
+                        "200":
+                          description: "200 response"
+                          schema:
+                            $ref: "#/definitions/User"
+                      x-amazon-apigateway-integration:
+                        credentials:
+                          Fn::GetAtt:
+                          - APIGatewayExecutionRole
+                          - Arn
+                        uri:
+                          Fn::Sub:
+                          - arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}${LambdaAlias}/invocations
+                          - LambdaAlias: ""
+                            LambdaArn:
+                              Fn::GetAtt:
+                              - LambdaFunction
+                              - Arn
+                        responses:
+                          default:
+                            statusCode: "200"
+                            responseTemplates:
+                              application/json: "#set($inputRoot = $input.path('$'))\n$inputRoot.body"
+                        passthroughBehavior: "when_no_templates"
+                        httpMethod: "POST"
+                        requestTemplates:
+                          application/json: "{\n    \"operation\":\"DeleteUser\",\n    \"id\":$input.params('id')\n\
+                            }"
+                        contentHandling: "CONVERT_TO_TEXT"
+                        type: "aws"
+                definitions:
+                  User:
+                    type: "object"
+                    properties:
+                      username:
+                        type: "string"
+                      firstName:
+                        type: "string"
+                      lastName:
+                        type: "string"
+                      id:
+                        type: "integer"
+                        format: "int64"
+                      phone:
+                        type: "string"
+                      address:
+                        $ref: "#/definitions/Address"
+                      email:
+                        type: "string"
+                  Address:
+                    type: "object"
+                    properties:
+                      suite:
+                        type: "string"
+                      street:
+                        type: "string"
+                      zip:
+                        type: "string"
+                      city:
+                        type: "string"
+                  UserList:
+                    type: "array"
+                    items:
+                      $ref: "#/definitions/User"         
+                x-amazon-apigateway-request-validators:
+                  Validate body:
+                    validateRequestParameters: false
+                    validateRequestBody: true

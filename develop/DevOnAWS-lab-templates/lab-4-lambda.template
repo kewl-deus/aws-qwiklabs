@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Developing on AWS - v3.1 - Lab 4 - Lambda
+Parameters:
+  AWSAccessKey:
+    Description: Access key for our lab user.
+    Type: String
+  AWSSecretAccessKey:
+    Description: Secret access key for our lab user.
+    Type: String
+  KeyName:
+    Type: String
+    Description: Keyname for the keypair the lab will use to launch EC2 instances
+    Default: default-lab-key
+  LabUrlPrefix:
+    Type: String
+    Default: 'http://us-west-2-tcdev.s3.amazonaws.com/courses/ILT-TF-100-DODEVA/v3.3.0'
+  LabName:
+    Type: String
+    Default: lab-4-lambda
+  AWSAmiId:
+    Description: The name of the Windows AMI to find based on search
+    Type: String
+    Default: 'x86_64,Windows_Server-2012-R2_RTM-English-64Bit-Base'
+Resources:
+  BaseDevelopmentStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: 'http://us-west-2-tcdev.s3.amazonaws.com/courses/ILT-TF-100-DODEVA/v3.3.0/lab-1-readysetgo/base/base-developing-template.template'
+      Parameters:
+        AWSAccessKey: !Ref AWSAccessKey
+        AWSSecretAccessKey: !Ref AWSSecretAccessKey
+        KeyName: !Ref KeyName
+        LabUrlPrefix: !Ref LabUrlPrefix
+        AWSAmiId: !Ref AWSAmiId
+        ParentLabName: !Ref LabName
+      TimeoutInMinutes: 60
+
+  LambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+        RoleName: "lambda_execution_role"
+        AssumeRolePolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: "Allow"
+                Action: 
+                  - "sts:AssumeRole"
+                Principal: 
+                    Service: 
+                      - "lambda.amazonaws.com"
+        ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  
+Outputs:
+  GuacamoleLink:
+    Value: !GetAtt 
+      - BaseDevelopmentStack
+      - Outputs.GuacamoleLink
+  WindowsInstanceIP:
+    Value: !GetAtt 
+      - BaseDevelopmentStack
+      - Outputs.WindowsInstanceIP
+  WindowsPassword:
+    Value: !GetAtt 
+      - BaseDevelopmentStack
+      - Outputs.WindowsPassword
+  LinuxInstanceIP:
+    Value: !GetAtt 
+      - BaseDevelopmentStack
+      - Outputs.LinuxInstanceIP

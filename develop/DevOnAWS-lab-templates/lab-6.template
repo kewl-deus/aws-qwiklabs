@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Developing on AWS - v3.2 - Lab 6: Docker'
+Parameters:
+  LabVPCCIDR:
+    Description: CIDR Block for Lab VPC
+    Type: String
+    Default: 10.0.0.0/16
+    AllowedValues:
+      - 10.0.0.0/16
+  LabVPCPublicSubnetCIDR:
+    Description: LabVPC Public Subnet
+    Type: String
+    Default: 10.0.10.0/24
+    AllowedValues:
+      - 10.0.10.0/24
+  AWSAccessKey:
+    Description: Access key for our lab user.
+    Type: String
+  AWSSecretAccessKey:
+    Description: Secret access key for our lab user.
+    Type: String
+  KeyName:
+    Type: String
+    Description: Keyname for the keypair the lab will use to launch EC2 instances
+    Default: default-lab-key
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn-ami-hvm-x86_64-gp2
+Resources:
+  LabVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref LabVPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: VPC
+          Value: Lab VPC
+        - Key: Name
+          Value: Lab VPC
+  LabVPCInternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    DependsOn: LabVPC
+  LabVPCAttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref LabVPC
+      InternetGatewayId: !Ref LabVPCInternetGateway
+  LabVPCPublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      VpcId: !Ref LabVPC
+      CidrBlock: !Ref LabVPCPublicSubnetCIDR
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: Lab VPC Public Subnet
+  LabVPCPublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      VpcId: !Ref LabVPC
+      Tags:
+        - Key: Name
+          Value: LabVPC Public Route Table
+  LabVPCPublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      RouteTableId: !Ref LabVPCPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref LabVPCInternetGateway
+  LabVPCPublicSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      SubnetId: !Ref LabVPCPublicSubnet
+      RouteTableId: !Ref LabVPCPublicRouteTable
+  DevInstanceLinuxSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      GroupDescription: Security Group for Linux instance
+      VpcId: !Ref LabVPC
+      Tags:
+        - Key: Name
+          Value: LINUX Dev Instance
+        - Key: InstanceType
+          Value: General
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  DevInstanceLinuxWaitHandle01:
+    Type: 'AWS::CloudFormation::WaitConditionHandle'
+    Properties: {}
+  DevInstanceLinuxWaitCondition01:
+    Type: 'AWS::CloudFormation::WaitCondition'
+    DependsOn: DevInstanceLinux
+    Properties:
+      Handle: !Ref DevInstanceLinuxWaitHandle01
+      Timeout: '1800'
+  DevInstanceLinux:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: LabVPCAttachGateway
+    Properties:
+      KeyName: !Ref KeyName
+      ImageId: !Ref LatestAmiId
+      InstanceType: t2.small
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref LabVPCPublicSubnet
+          GroupSet:
+            - !Ref DevInstanceLinuxSecurityGroup
+      Tags:
+        - Key: Name
+          Value: LINUX Dev Instance
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -ex 
+            - |
+              yum -y update 
+            - |
+              sudo yum install docker -y 
+            - |
+              sudo service docker start 
+            - |
+              sudo usermod -a -G docker ec2-user 
+            - |
+              mkdir /home/ec2-user/.aws 
+            - |
+              cat > /home/ec2-user/.aws/config <<EOF
+            - |
+              [default]
+            - 'region = '
+            - !Ref 'AWS::Region'
+            - |
+
+              EOF
+            - |
+              cat > /home/ec2-user/.aws/credentials <<CREDEOF
+            - |
+              [default]
+            - aws_access_key_id=
+            - !Ref AWSAccessKey
+            - |+
+
+            - aws_secret_access_key=
+            - !Ref AWSSecretAccessKey
+            - |
+
+              CREDEOF
+            - /opt/aws/bin/cfn-signal -s true '
+            - !Ref DevInstanceLinuxWaitHandle01
+            - |
+              '
+  ecsTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+Outputs:
+  LinuxInstanceIP:
+    Value: !GetAtt 
+      - DevInstanceLinux
+      - PublicIp
